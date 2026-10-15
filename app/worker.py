@@ -22,6 +22,12 @@ from app.channels import default_channels
 from app.config import get_settings
 from app.db import SessionFactory, engine
 from app.logging_setup import configure_logging
+from app.services.analysis import (
+    build_engine,
+    claim_analyses,
+    process_analysis,
+    reap_analyses,
+)
 from app.services.delivery import claim_due, deliver_attempt, reap_expired
 from app.services.detector import detect_dropoffs
 
@@ -31,6 +37,8 @@ log = logging.getLogger("revive.worker")
 async def startup(ctx: dict) -> None:
     configure_logging(get_settings().log_level)
     ctx["channels"] = default_channels()
+    # arq's Redis connection doubles as the store for the shared Gemini rate limiter.
+    ctx["engine"] = build_engine(ctx["redis"])
     log.info("worker started")
 
 
@@ -62,12 +70,25 @@ async def deliver_job(ctx: dict, attempt_id: str) -> str:
     return outcome
 
 
+async def analysis_job(ctx: dict) -> int:
+    """Analyse finished calls. One at a time on purpose: the rate limiter paces Gemini, and
+    a long queue simply drains over the next ticks."""
+    now = datetime.now(UTC)
+    async with SessionFactory() as db:
+        await reap_analyses(db, now)
+        claimed = await claim_analyses(db, now, get_settings().analysis_batch_size)
+    for analysis_id in claimed:
+        await process_analysis(analysis_id, ctx["engine"])
+    return len(claimed)
+
+
 class WorkerSettings:
     functions = [deliver_job]
     cron_jobs = [
         # unique=True (the default): if two workers run, each tick still runs only once.
         cron(detect_job, second={0}, run_at_startup=True),
         cron(dispatch_job, second={0, 10, 20, 30, 40, 50}),
+        cron(analysis_job, second={5, 15, 25, 35, 45, 55}),
     ]
     on_startup = startup
     on_shutdown = shutdown

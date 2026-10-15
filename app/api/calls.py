@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from app.errors import ApiError
-from app.models import Call, CallWebhookEvent
+from app.models import Call, CallAnalysis, CallWebhookEvent
 from app.security import SessionDep, TenantDep
 from app.services.calls import process_webhook
 
@@ -55,10 +55,27 @@ class WebhookEventOut(BaseModel):
     effect: str | None
 
 
+class AnalysisOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    status: str
+    source: str | None
+    model: str | None
+    prompt_version: str | None
+    result: dict | None
+    redactions: dict | None
+    guardrail_notes: list | None
+    actions: list | None
+    latency_ms: int | None
+    tries: int
+    last_error: str | None
+
+
 class CallDetailOut(CallOut):
     transcript: list | None
     recording_url: str | None
     webhook_events: list[WebhookEventOut]
+    analysis: AnalysisOut | None
 
 
 @router.get("", response_model=list[CallOut], summary="List calls, newest first")
@@ -88,9 +105,11 @@ async def get_call(call_id: uuid.UUID, tenant: TenantDep, db: SessionDep) -> Cal
         .where(CallWebhookEvent.call_id == call.id)
         .order_by(CallWebhookEvent.received_at)
     )
+    analysis = await db.scalar(select(CallAnalysis).where(CallAnalysis.call_id == call.id))
     return CallDetailOut(
         **CallOut.model_validate(call).model_dump(),
         transcript=call.transcript,
         recording_url=call.recording_url,
         webhook_events=[WebhookEventOut.model_validate(e) for e in events],
+        analysis=AnalysisOut.model_validate(analysis) if analysis else None,
     )

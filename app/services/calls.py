@@ -35,7 +35,7 @@ from app.domain.journey import SessionStatus
 from app.domain.policy import Channel, policy_of
 from app.domain.scheduling import AttemptStatus, next_allowed_time, window_for
 from app.errors import ApiError
-from app.models import Call, CallWebhookEvent, OutreachAttempt, Tenant
+from app.models import Call, CallAnalysis, CallWebhookEvent, OutreachAttempt, Tenant
 from app.schemas import AwareDatetime
 from app.webhook_security import WebhookSignatureError, verify
 
@@ -130,8 +130,24 @@ async def _apply(db: AsyncSession, call: Call, hook: VoiceWebhook, now: datetime
         turns = [TranscriptTurn.model_validate(t) for t in hook.data.get("turns", [])]
         call.transcript = [t.model_dump() for t in turns]
         call.language = hook.data.get("language")
-        # Phase 4 hooks in here: queue the transcript for Gemini analysis.
-        return f"transcript stored ({len(turns)} turns)"
+        if not turns:
+            return "transcript stored (empty, not analysed)"
+        # Queue the analysis in the same transaction (the outbox pattern again). Gemini is
+        # far too slow to call inside a webhook request. If the provider re-sends the
+        # transcript, the unique call_id keeps it to one analysis.
+        await db.execute(
+            insert(CallAnalysis)
+            .values(
+                id=uuid.uuid4(),
+                tenant_id=call.tenant_id,
+                call_id=call.id,
+                status="pending",
+                available_at=now,
+                tries=0,
+            )
+            .on_conflict_do_nothing(index_elements=["call_id"])
+        )
+        return f"transcript stored ({len(turns)} turns); analysis queued"
     if hook.type == CallEventType.RECORDING_READY:
         call.recording_url = hook.data.get("url")
         return "recording stored"

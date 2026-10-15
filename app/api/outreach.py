@@ -6,15 +6,15 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 from sqlalchemy import delete, select, update
-from sqlalchemy.dialects.postgresql import insert
 
-from app.domain.policy import Channel, OutreachPolicy, policy_of
+from app.domain.policy import OutreachPolicy, policy_of
 from app.domain.scheduling import AttemptStatus
 from app.errors import ApiError
 from app.logging_setup import mask_phone
-from app.models import Customer, DndEntry, OutreachAttempt
+from app.models import DndEntry, OutreachAttempt
 from app.schemas import AttemptOut, DndIn, DndOut, Phone
 from app.security import SessionDep, TenantDep
+from app.services.dnd import add_to_dnd
 
 router = APIRouter(prefix="/v1", tags=["outreach"])
 
@@ -40,25 +40,9 @@ async def put_policy(body: OutreachPolicy, tenant: TenantDep, db: SessionDep) ->
 
 @router.post("/dnd", response_model=DndOut, status_code=201, summary="Never call this number")
 async def add_dnd(body: DndIn, tenant: TenantDep, db: SessionDep) -> DndOut:
-    await db.execute(
-        insert(DndEntry)
-        .values(id=uuid.uuid4(), tenant_id=tenant.id, phone=body.phone, reason=body.reason)
-        .on_conflict_do_nothing(index_elements=["tenant_id", "phone"])  # adding twice is fine
-    )
-    # Take effect immediately: skip calls already scheduled for this number. (Delivery
-    # re-checks DND anyway, but this keeps the visible state honest right away.)
-    customer_ids = select(Customer.id).where(
-        Customer.tenant_id == tenant.id, Customer.phone == body.phone
-    )
-    await db.execute(
-        update(OutreachAttempt)
-        .where(
-            OutreachAttempt.customer_id.in_(customer_ids.scalar_subquery()),
-            OutreachAttempt.channel == Channel.VOICE,
-            OutreachAttempt.status == AttemptStatus.SCHEDULED,
-        )
-        .values(status=AttemptStatus.SKIPPED, status_reason="dnd")
-    )
+    # Takes effect immediately: calls already scheduled for this number are skipped.
+    # (Delivery re-checks DND anyway, but this keeps the visible state honest right away.)
+    await add_to_dnd(db, tenant.id, body.phone, body.reason)
     await db.commit()
     entry = await db.scalar(
         select(DndEntry).where(DndEntry.tenant_id == tenant.id, DndEntry.phone == body.phone)

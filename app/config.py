@@ -39,6 +39,17 @@ class Settings(BaseSettings):
     webhook_tolerance_seconds: int = 300
     public_base_url: str = "http://localhost:8077"
 
+    # Call analysis (Phase 4). Without a key, the rule-based analyzer is used.
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-3.5-flash-lite"
+    gemini_rpm: float = 10  # stay under the free tier's per-minute limit
+    gemini_rpd: int = 1000  # and its per-day limit
+    gemini_timeout_seconds: float = 20
+    analysis_batch_size: int = 5
+    analysis_max_tries: int = 4  # transient LLM failures before falling back to rules
+    breaker_failure_threshold: int = 5
+    breaker_cooldown_seconds: float = 60
+
     @property
     def webhook_secret_list(self) -> list[str]:
         return [s.strip() for s in self.voice_webhook_secrets.split(",") if s.strip()]

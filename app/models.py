@@ -262,3 +262,35 @@ class CallWebhookEvent(Base):
     # What applying it did, e.g. "status ringing -> in_progress" or "ignored: already completed"
     effect: Mapped[str | None] = mapped_column(String(200))
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
+class CallAnalysis(Base):
+    """The AI analysis of one answered call. Also a work queue (same pattern as outreach_attempts):
+    the webhook inserts a pending row, the worker claims it with a lease and fills it in.
+    """
+
+    __tablename__ = "call_analyses"
+    __table_args__ = (Index("ix_analyses_status_available", "status", "available_at"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    call_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("calls.id"), nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)  # pending|processing|done
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tries: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+    source: Mapped[str | None] = mapped_column(String(16))  # "llm" or "rules"
+    model: Mapped[str | None] = mapped_column(String(64))
+    prompt_version: Mapped[str | None] = mapped_column(String(32))
+    result: Mapped[dict | None] = mapped_column(JSONB)  # the validated CallInsight
+    # Audit trail: what was masked before sending, what the guardrails changed, what we did.
+    redactions: Mapped[dict | None] = mapped_column(JSONB)
+    guardrail_notes: Mapped[list | None] = mapped_column(JSONB)
+    actions: Mapped[list | None] = mapped_column(JSONB)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = _now()
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
