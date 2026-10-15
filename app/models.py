@@ -182,6 +182,8 @@ class OutreachAttempt(Base):
     # the reaper puts the attempt back to "scheduled". Same idea as an SQS visibility timeout.
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     tries: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Voice only: how many times this call was re-dialled after no answer / busy.
+    redials: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     last_error: Mapped[str | None] = mapped_column(String(500))
     message: Mapped[str | None] = mapped_column(String(1000))
     provider_ref: Mapped[str | None] = mapped_column(String(128))
@@ -192,3 +194,71 @@ class OutreachAttempt(Base):
     )
 
     session: Mapped[OnboardingSession] = relationship(lazy="joined")
+
+
+class Call(Base):
+    """One phone call placed through the voice provider.
+
+    An attempt can produce several calls (re-dials after no answer). Our own id is sent to
+    the provider as client_reference, so every webhook says which of our calls it's about.
+    That works even before we've saved the provider's id for the call.
+    """
+
+    __tablename__ = "calls"
+    __table_args__ = (
+        # Provider call ids are unique per provider, not globally: two vendors can both
+        # issue "call_123". So the constraint covers both columns.
+        UniqueConstraint("provider", "provider_call_id", name="uq_calls_provider_call_id"),
+        Index("ix_calls_customer_placed", "customer_id", "placed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    attempt_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("outreach_attempts.id"), nullable=False, index=True
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("onboarding_sessions.id"), nullable=False, index=True
+    )
+    customer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("customers.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_call_id: Mapped[str | None] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    placed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    end_reason: Mapped[str | None] = mapped_column(String(64))
+    language: Mapped[str | None] = mapped_column(String(16))
+    # [{"speaker": "agent"|"user", "text": "...", "start_ms": 1200}, ...]
+    transcript: Mapped[list | None] = mapped_column(JSONB)
+    recording_url: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = _now()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class CallWebhookEvent(Base):
+    """Every webhook we accepted, stored raw: the "inbox".
+
+    The unique (provider, provider_event_id) makes webhook handling idempotent: a retried
+    delivery hits the constraint and is acknowledged without being processed twice.
+    Keeping the raw payload also means we can debug "what exactly did they send us?"
+    """
+
+    __tablename__ = "call_webhook_events"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_event_id", name="uq_webhook_provider_event"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    call_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("calls.id"), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_event_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    type: Mapped[str] = mapped_column(String(32), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[datetime] = _now()
+    # What applying it did, e.g. "status ringing -> in_progress" or "ignored: already completed"
+    effect: Mapped[str | None] = mapped_column(String(200))
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)

@@ -28,6 +28,21 @@ class Settings(BaseSettings):
     # Simulated providers: probability that a send fails temporarily (to watch retries).
     sim_failure_rate: float = 0.0
 
+    # Voice provider (Phase 3). With no voice_api_url, voice uses the in-process simulator
+    # (no webhooks). Point it at simulator/ (or a real provider) for the full call flow.
+    voice_provider: str = "revive-sim"
+    voice_api_url: str | None = None
+    voice_api_key: str = "sim_key_dev"
+    # Comma-separated. Every listed secret is accepted, so the secret can be rotated
+    # without downtime: add the new one, switch the provider over, remove the old one.
+    voice_webhook_secrets: str = "whsec_dev_only_change_me"
+    webhook_tolerance_seconds: int = 300
+    public_base_url: str = "http://localhost:8077"
+
+    @property
+    def webhook_secret_list(self) -> list[str]:
+        return [s.strip() for s in self.voice_webhook_secrets.split(",") if s.strip()]
+
 
 @lru_cache
 def get_settings() -> Settings:

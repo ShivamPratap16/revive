@@ -33,7 +33,7 @@ class FakeChannel:
         if self.error:
             raise self.error
         self.sent.append(msg)
-        return f"fake_{len(self.sent)}"
+        return f"fake_{uuid.uuid4().hex[:8]}"  # unique, like real provider ids
 
 
 def channels(in_app=None, voice=None):

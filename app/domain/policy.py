@@ -71,6 +71,9 @@ class OutreachPolicy(BaseModel):
     max_drop_rounds: int = Field(default=2, ge=1, le=5)  # stop chasing after this
     attribution_window_hours: int = Field(default=72, ge=1, le=24 * 30)
     max_delivery_tries: int = Field(default=5, ge=1, le=20)
+    # No answer / busy: dial the same attempt again after a gap, at most this many times.
+    max_redials: int = Field(default=1, ge=0, le=3)
+    redial_after_minutes: int = Field(default=120, ge=5, le=24 * 60)
 
     @field_validator("timezone")
     @classmethod

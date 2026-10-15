@@ -22,7 +22,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.channels import (
@@ -33,11 +33,12 @@ from app.channels import (
 )
 from app.config import get_settings
 from app.db import SessionFactory
+from app.domain.calls import CallStatus
 from app.domain.journey import SessionStatus, Step
 from app.domain.messages import render
 from app.domain.policy import Channel, policy_of
 from app.domain.scheduling import Action, AttemptStatus, backoff_seconds, decide
-from app.models import Customer, DndEntry, OutreachAttempt, Tenant
+from app.models import Call, Customer, DndEntry, OutreachAttempt, Tenant
 
 log = logging.getLogger(__name__)
 
@@ -109,13 +110,13 @@ async def _prepare(attempt_id: uuid.UUID, now: datetime) -> OutboundMessage | st
                 )
             )
         )
+        # Daily cap counts calls actually placed (from the calls table), including
+        # unanswered ones and re-dials: dialling someone 5 times is 5 calls to them.
         recent = list(
             await db.scalars(
-                select(OutreachAttempt.sent_at).where(
-                    OutreachAttempt.customer_id == customer.id,
-                    OutreachAttempt.channel == Channel.VOICE,
-                    OutreachAttempt.status == AttemptStatus.SENT,
-                    OutreachAttempt.sent_at > now - timedelta(hours=24),
+                select(Call.placed_at).where(
+                    Call.customer_id == customer.id,
+                    Call.placed_at > now - timedelta(hours=24),
                 )
             )
         )
@@ -153,7 +154,8 @@ async def _prepare(attempt_id: uuid.UUID, now: datetime) -> OutboundMessage | st
         )
         a.message = text
         a.tries += 1
-        await db.commit()
+        call_id = await _call_for_placement(db, a) if channel == Channel.VOICE else None
+        await db.commit()  # the call row exists BEFORE we ask the provider to dial
         return OutboundMessage(
             attempt_id=a.id,
             channel=channel,
@@ -161,12 +163,46 @@ async def _prepare(attempt_id: uuid.UUID, now: datetime) -> OutboundMessage | st
             phone=customer.phone,
             language=customer.preferred_language,
             text=text,
+            call_id=call_id,
         )
 
 
-async def _record(attempt_id: uuid.UUID, values: dict) -> bool:
-    """Transaction 2: save the outcome, but only if we still own the attempt."""
+async def _call_for_placement(db: AsyncSession, a: OutreachAttempt) -> uuid.UUID:
+    """The call row for this placement: reuse one we haven't confirmed yet, else create one.
+
+    Reuse matters for retries. If our request timed out, the provider may have placed the
+    call anyway. Retrying with the SAME call id means the same idempotency key, so the
+    provider returns the existing call instead of dialling the user a second time.
+    A re-dial after no answer comes after placed_at was set, so it gets a new row (a new call).
+    """
+    existing = await db.scalar(
+        select(Call)
+        .where(Call.attempt_id == a.id, Call.placed_at.is_(None))
+        .order_by(Call.created_at.desc())
+        .limit(1)
+    )
+    if existing is not None:
+        return existing.id
+    call = Call(
+        tenant_id=a.tenant_id,
+        attempt_id=a.id,
+        session_id=a.session_id,
+        customer_id=a.customer_id,
+        provider=get_settings().voice_provider,
+        status=CallStatus.INITIATING,
+    )
+    db.add(call)
+    await db.flush()  # assigns call.id without committing yet
+    return call.id
+
+
+async def _record(attempt_id: uuid.UUID, values: dict, call: tuple | None = None) -> bool:
+    """Transaction 2: save the outcome, but only if we still own the attempt.
+    `call` = (call_id, values) updates the call row in the same transaction."""
     async with SessionFactory() as db:
+        if call is not None:
+            call_id, call_values = call
+            await db.execute(update(Call).where(Call.id == call_id).values(**call_values))
         result = await db.execute(
             update(OutreachAttempt)
             .where(
@@ -208,6 +244,9 @@ async def deliver_attempt(
                 "last_error": str(exc)[:500],
                 "status_reason": "permanent_error",
             },
+            call=(msg.call_id, {"status": CallStatus.FAILED, "end_reason": "rejected"})
+            if msg.call_id
+            else None,
         )
         log.warning(
             "attempt dead", extra={"fields": {"attempt_id": str(attempt_id), "error": str(exc)}}
@@ -225,6 +264,19 @@ async def deliver_attempt(
             "status_reason": None,
             "last_error": None,
         },
+        # A webhook may already have moved the call past "queued"; only set queued if not.
+        call=(
+            msg.call_id,
+            {
+                "provider_call_id": ref,
+                "placed_at": now,
+                "status": case(
+                    (Call.status == CallStatus.INITIATING, CallStatus.QUEUED), else_=Call.status
+                ),
+            },
+        )
+        if msg.call_id
+        else None,
     )
     return "sent"
 
@@ -247,6 +299,8 @@ async def _handle_transient(attempt_id: uuid.UUID, exc: Exception, now: datetime
         return "dead"
 
     delay = backoff_seconds(tries, settings.retry_base_seconds, settings.retry_cap_seconds)
+    # If the provider said how long to wait (429 Retry-After), never retry sooner than that.
+    delay = max(delay, getattr(exc, "retry_after", None) or 0)
     await _record(
         attempt_id,
         {
