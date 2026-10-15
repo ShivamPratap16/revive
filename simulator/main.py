@@ -13,6 +13,8 @@ On purpose, like real providers on a bad day, it also:
   * swaps the order of some webhooks               SIM_REORDER_RATE
   * retries webhook delivery when we return non-2xx
   * rejects numbers ending 0000 (422) and sometimes fails with 503   SIM_API_ERROR_RATE
+Magic test numbers, like real providers' test modes: ending 0000 = invalid number,
+ending 1111 = always answers (used by the public demo, so visitors see a conversation).
 Time runs faster than reality: SIM_TIME_SCALE=0.1 makes a 60 s call take 6 s.
 """
 
@@ -89,7 +91,12 @@ async def create_call(
         raise HTTPException(503, "temporarily overloaded")
 
     call_id = f"sim_call_{uuid.uuid4().hex[:12]}"
-    scenario = scenarios.pick(cfg.rng, cfg.force_scenario, scenarios.topic_of(body.opening_line))
+    scenario = scenarios.pick(
+        cfg.rng,
+        cfg.force_scenario,
+        scenarios.topic_of(body.opening_line),
+        answered_only=body.to.endswith("1111"),
+    )
     app.state.calls[call_id] = {"request": body.model_dump(), "scenario": scenario.name}
     response = {"id": call_id, "status": "queued"}
     if idempotency_key:

@@ -185,15 +185,23 @@ def topic_of(opening_line: str | None) -> str | None:
     return next((t for t, words in TOPIC_KEYWORDS.items() if any(w in line for w in words)), None)
 
 
-def pick(rng: random.Random, forced: str | None = None, topic: str | None = None) -> Scenario:
+def pick(
+    rng: random.Random,
+    forced: str | None = None,
+    topic: str | None = None,
+    answered_only: bool = False,
+) -> Scenario:
     """Weighted random choice among scenarios that fit the call's topic.
 
     A call about video KYC must not produce a transcript about an OTP: Phase 4 analyses
     these, and contradictory test data would hide real bugs.
+    answered_only: for "magic" test numbers that always pick up (see simulator/main.py).
     """
     if forced:
         return BY_NAME[forced]
     fits = [s for s in SCENARIOS if s.topic is None or s.topic == topic]
+    if answered_only:
+        fits = [s for s in fits if s.outcome == "completed"]
     return rng.choices(fits, weights=[s.weight for s in fits])[0]
 
 

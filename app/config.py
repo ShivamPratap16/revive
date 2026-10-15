@@ -71,6 +71,12 @@ class Settings(BaseSettings):
     run_worker_in_process: bool = False
     mount_simulator: bool = False
 
+    # Public demo (/ and /v1/demo/*): which tenant visitors see, and how often they may
+    # create a test user (per visitor per 10 minutes, and for everyone per hour).
+    demo_tenant_name: str = "Demo Fintech"
+    demo_try_per_visitor: int = 3
+    demo_try_per_hour: int = 30
+
     # Call analysis (Phase 4). Without a key, the rule-based analyzer is used.
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.5-flash-lite"

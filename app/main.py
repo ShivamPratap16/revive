@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
-from app.api import analytics, calls, events, health, outreach, sessions
+from app.api import analytics, calls, demo, events, health, outreach, sessions
 from app.config import get_settings
 from app.db import engine
 from app.errors import register_error_handlers
@@ -56,6 +56,7 @@ def create_app() -> FastAPI:
     app.include_router(calls.router)
     app.include_router(calls.webhooks)
     app.include_router(analytics.router)
+    app.include_router(demo.router)
 
     if get_settings().mount_simulator:
         # All-in-one mode: the fake voice provider lives at /sim on the same server.
@@ -63,12 +64,17 @@ def create_app() -> FastAPI:
 
         app.mount("/sim", simulator_app)
 
-    dashboard = Path(__file__).parent / "static" / "dashboard.html"
+    static = Path(__file__).parent / "static"
+
+    @app.get("/", include_in_schema=False)
+    async def _home() -> FileResponse:
+        # Landing page: what Revive is, live demo numbers, and a "watch it work" button.
+        return FileResponse(static / "index.html")
 
     @app.get("/dashboard", include_in_schema=False)
     async def _dashboard() -> FileResponse:
-        # A static page; it calls /v1/analytics/summary with the key the user pastes in.
-        return FileResponse(dashboard)
+        # Shows the public demo by default; paste a tenant key to see your own numbers.
+        return FileResponse(static / "dashboard.html")
 
     return app
 

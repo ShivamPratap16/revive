@@ -11,9 +11,14 @@ Gemini, and acts on it: *"shaam ko 6 baje ke baad karo"* becomes a 6pm call, and
 
 Python 3.13 · FastAPI · async SQLAlchemy 2.0 · PostgreSQL · Redis · arq · Gemini · Docker · GitHub Actions
 
-### Live demo: [revive-h920.onrender.com/dashboard](https://revive-h920.onrender.com/dashboard)
+### Live demo: [revive-h920.onrender.com](https://revive-h920.onrender.com)
 
-Demo API key: `rv_live_5fubuSFUQFHEsbTEKXHgVzzoYH9eACRhYnZcBtc9_zo`. Paste it on the dashboard, or click **Authorize** on the
+Open it and press **Watch it work live**: it creates a user stuck in KYC, and over ~90 seconds you see
+the real background jobs pick them up, a (simulated) phone call with signed webhooks, the transcript,
+and Gemini's analysis and the action Revive took. The [dashboard](https://revive-h920.onrender.com/dashboard)
+shows a simulated month of users. No key needed for either.
+
+For the API itself, use the demo key `rv_live_5fubuSFUQFHEsbTEKXHgVzzoYH9eACRhYnZcBtc9_zo`. Paste it on the dashboard, or click **Authorize** on the
 [interactive API docs](https://revive-h920.onrender.com/docs). It only reaches the demo tenant.
 *Free hosting: the first request after a quiet spell takes about a minute while the server wakes up.*
 
