@@ -11,6 +11,24 @@ Gemini, and acts on it: *"shaam ko 6 baje ke baad karo"* becomes a 6pm call, and
 
 Python 3.13 · FastAPI · async SQLAlchemy 2.0 · PostgreSQL · Redis · arq · Gemini · Docker · GitHub Actions
 
+### Live demo: [revive-h920.onrender.com/dashboard](https://revive-h920.onrender.com/dashboard)
+
+Demo API key: `rv_live_5fubuSFUQFHEsbTEKXHgVzzoYH9eACRhYnZcBtc9_zo`. Paste it on the dashboard, or click **Authorize** on the
+[interactive API docs](https://revive-h920.onrender.com/docs). It only reaches the demo tenant.
+*Free hosting: the first request after a quiet spell takes about a minute while the server wakes up.*
+
+**Try the whole pipeline yourself.** Report a user stuck on Aadhaar OTP; within about 2 minutes they get a nudge
+and a voice call, and Gemini's analysis appears under `GET /v1/calls`:
+
+```bash
+curl -X POST https://revive-h920.onrender.com/v1/events \
+  -H "X-API-Key: rv_live_5fubuSFUQFHEsbTEKXHgVzzoYH9eACRhYnZcBtc9_zo" -H "Content-Type: application/json" \
+  -d '{"events":[{"event_id":"try-'$RANDOM'","session_id":"try-'$RANDOM'","type":"step_failed",
+       "step":"aadhaar_otp","error_code":"OTP_NOT_RECEIVED",
+       "occurred_at":"'$(date -u -d '-2 minutes' +%Y-%m-%dT%H:%M:%SZ)'",
+       "user":{"id":"you","phone":"+919876543210","name":"Your Name","language":"hinglish"}}]}'
+```
+
 ![Revive dashboard: funnel, drop-offs by step, recovery, reasons from call analysis](docs/dashboard.jpg)
 
 *Dashboard over 200 simulated users (`python -m app.demo`): 118 drop-offs, 38 recovered (32%), median 36 minutes from drop-off to completion.*
