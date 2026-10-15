@@ -1,5 +1,7 @@
 # Revive
 
+[![CI](https://github.com/ShivamPratap16/revive/actions/workflows/ci.yml/badge.svg)](https://github.com/ShivamPratap16/revive/actions/workflows/ci.yml)
+
 **A backend that wins back users who abandon KYC halfway through a fintech app.**
 
 A user starts onboarding on a lending or broking app, gets stuck at the Aadhaar OTP, and closes it.
