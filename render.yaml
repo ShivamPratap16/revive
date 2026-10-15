@@ -1,0 +1,48 @@
+# Render Blueprint: Dashboard -> New -> Blueprint -> pick this repo.
+# Free plan, everything in Singapore (closest region to India). Postgres is Neon (free,
+# doesn't expire), so DATABASE_URL is asked for when the Blueprint is created.
+services:
+  - type: web
+    name: revive
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerCommand: sh scripts/start.sh
+    healthCheckPath: /health/ready
+    autoDeploy: true
+    envVars:
+      # Asked for once, at creation. Never committed.
+      - key: DATABASE_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: revive-redis
+          property: connectionString
+      # One free web service does everything (see README "Deployment")
+      - key: RUN_WORKER_IN_PROCESS
+        value: "true"
+      - key: MOUNT_SIMULATOR
+        value: "true"
+      # Random per deployment, shared by Revive and its mounted simulator
+      - key: VOICE_API_KEY
+        generateValue: true
+      - key: VOICE_WEBHOOK_SECRETS
+        generateValue: true
+      # A public demo: keep Gemini usage and DB connections small
+      - key: GEMINI_RPD
+        value: "200"
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: SIM_TIME_SCALE
+        value: "0.2"
+
+  - type: keyvalue
+    name: revive-redis
+    plan: free
+    region: singapore
+    ipAllowList: []            # no outside access: only services in this Render account
+    maxmemoryPolicy: noeviction  # a job queue must never silently drop keys

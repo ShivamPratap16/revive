@@ -38,8 +38,13 @@ log = logging.getLogger("simulator")
 
 class Config:
     def __init__(self):
-        self.api_key = os.getenv("SIM_API_KEY", "sim_key_dev")
-        self.secret = os.getenv("SIM_WEBHOOK_SECRET", "whsec_dev_only_change_me")
+        # When mounted inside the Revive server (all-in-one mode), fall back to Revive's
+        # own settings, so the two sides always agree on the key and the signing secret.
+        self.api_key = os.getenv("SIM_API_KEY") or os.getenv("VOICE_API_KEY") or "sim_key_dev"
+        revive_secrets = (os.getenv("VOICE_WEBHOOK_SECRETS") or "").split(",")[0].strip()
+        self.secret = (
+            os.getenv("SIM_WEBHOOK_SECRET") or revive_secrets or "whsec_dev_only_change_me"
+        )
         self.time_scale = float(os.getenv("SIM_TIME_SCALE", "0.1"))
         self.duplicate_rate = float(os.getenv("SIM_DUPLICATE_RATE", "0.15"))
         self.reorder_rate = float(os.getenv("SIM_REORDER_RATE", "0.15"))

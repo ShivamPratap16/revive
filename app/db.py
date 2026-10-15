@@ -18,8 +18,8 @@ class Base(DeclarativeBase):
 
 engine = create_async_engine(
     get_settings().database_url,
-    pool_size=10,
-    max_overflow=10,
+    pool_size=get_settings().db_pool_size,
+    max_overflow=get_settings().db_pool_size,
     # Test a pooled connection before use, so a restarted DB doesn't break requests.
     pool_pre_ping=True,
 )

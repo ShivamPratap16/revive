@@ -1,4 +1,6 @@
-from contextlib import asynccontextmanager
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -14,7 +16,26 @@ from app.logging_setup import RequestContextMiddleware, configure_logging
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # Code before `yield` runs at startup, code after it at shutdown.
+    worker, task = None, None
+    if get_settings().run_worker_in_process:
+        # All-in-one mode: run the arq worker as a background task in this process.
+        # handle_signals=False: the web server owns SIGTERM/SIGINT, not the worker.
+        from arq.worker import create_worker
+
+        from app.worker import WorkerSettings
+
+        worker = create_worker(WorkerSettings, handle_signals=False)
+        task = asyncio.create_task(worker.async_run())
+        logging.getLogger("revive").info("worker running in-process")
     yield
+    if task is not None:
+        # Cancel rather than worker.close(): close() raises SIGUSR1, which Windows lacks.
+        # Anything interrupted mid-delivery is safe: its lease expires and it's re-claimed.
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        with suppress(Exception):
+            await worker.pool.close(close_connection_pool=True)
     await engine.dispose()  # close pooled DB connections cleanly
 
 
@@ -35,6 +56,12 @@ def create_app() -> FastAPI:
     app.include_router(calls.router)
     app.include_router(calls.webhooks)
     app.include_router(analytics.router)
+
+    if get_settings().mount_simulator:
+        # All-in-one mode: the fake voice provider lives at /sim on the same server.
+        from simulator.main import app as simulator_app
+
+        app.mount("/sim", simulator_app)
 
     dashboard = Path(__file__).parent / "static" / "dashboard.html"
 
