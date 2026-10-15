@@ -251,7 +251,10 @@ async def main(users: int, seed: int) -> None:
     for k, v in outcomes.most_common():
         print(f"  {v:4}  {k}")
     print(f"\nTenant: {tenant.name}\nAPI key (shown once): {key}")
-    print("Open http://localhost:8077/dashboard and paste the key.")
+    print(
+        "Open /dashboard on the API and paste the key "
+        "(http://localhost:8000 with Docker, :8077 when running uvicorn locally)."
+    )
 
 
 if __name__ == "__main__":
