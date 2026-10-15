@@ -55,6 +55,11 @@ async def test_summary_numbers(client, api_key):
         ("video_kyc", 1, 0),
     ]
     assert d["recovered_by_channel"] == [{"key": "in_app", "count": 1}]
+    # Daily trend: 30 consecutive days ending today, summing to the totals above
+    assert len(d["daily"]) == 30
+    assert sum(x["started"] for x in d["daily"]) == 3
+    assert sum(x["dropped"] for x in d["daily"]) == 2
+    assert sum(x["recovered"] for x in d["daily"]) == 1
     assert d["by_language"] == [
         {"language": "hinglish", "dropped": 2, "recovered": 1, "recovery_rate": 0.5}
     ]
@@ -75,6 +80,9 @@ async def test_period_filter(client, api_key):
     assert (await summary(client, api_key, days=60))["sessions"]["started"] == 1
 
 
-async def test_dashboard_page_is_served(client):
-    r = await client.get("/dashboard")
-    assert r.status_code == 200 and "Revive" in r.text
+async def test_api_reference_page_is_served(client):
+    r = await client.get("/docs")
+    assert r.status_code == 200 and "@scalar/api-reference" in r.text
+    spec = (await client.get("/openapi.json")).json()
+    assert "ApiKey" in spec["components"]["securitySchemes"]  # the docs' Authorize button
+    assert [t["name"] for t in spec["tags"]][:2] == ["events", "sessions"]

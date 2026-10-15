@@ -5,15 +5,21 @@ read-only except /try, which is rate-limited (per visitor and overall) so the pu
 can't be used to burn the Gemini quota or flood the database.
 """
 
+import asyncio
+import hashlib
+import json
 import random
 import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
 from redis.asyncio import Redis
 from sqlalchemy import select
 
 from app.config import get_settings
+from app.db import SessionFactory
 from app.errors import ApiError
 from app.logging_setup import mask_phone
 from app.models import (
@@ -28,6 +34,7 @@ from app.models import (
 from app.schemas import IngestEvent
 from app.security import SessionDep
 from app.services.analytics import Summary, summary
+from app.services.detector import detect_for_tenant
 from app.services.events import ingest_batch
 
 router = APIRouter(prefix="/v1/demo", tags=["public demo"])
@@ -118,6 +125,10 @@ async def demo_try(request: Request, db: SessionDep) -> dict:
         }
     )
     await ingest_batch(db, tenant, [event])
+    # Don't make the visitor wait for the next once-a-minute detector run: run it now.
+    # Safe to run alongside the scheduled one: rows are locked with SKIP LOCKED and the
+    # outreach plan has a unique constraint, so a session can't be planned twice.
+    await detect_for_tenant(tenant.id, tenant.policy, datetime.now(UTC))
     session_id = await db.scalar(
         select(OnboardingSession.id).where(
             OnboardingSession.tenant_id == tenant.id,
@@ -127,16 +138,15 @@ async def demo_try(request: Request, db: SessionDep) -> dict:
     return {"session_id": str(session_id), "name": name, "language": language, "step": step}
 
 
-@router.get("/sessions/{session_id}", summary="Everything that happened to one demo session")
-async def demo_session(session_id: uuid.UUID, db: SessionDep) -> dict:
-    tenant = await _demo_tenant(db)
+async def _session_view(db, tenant_id: uuid.UUID, session_id: uuid.UUID) -> dict | None:
+    """One demo session as a timeline of everything that happened to it."""
     s = await db.scalar(
         select(OnboardingSession).where(
-            OnboardingSession.id == session_id, OnboardingSession.tenant_id == tenant.id
+            OnboardingSession.id == session_id, OnboardingSession.tenant_id == tenant_id
         )
     )
     if s is None:
-        raise ApiError(404, "session_not_found", "No such demo session")
+        return None
 
     timeline: list[dict] = []
 
@@ -204,5 +214,125 @@ async def demo_session(session_id: uuid.UUID, db: SessionDep) -> dict:
         },
         "timeline": timeline,
         "analysis": analysis_out,
+        # The latest call, so a viewer can show the conversation as soon as it exists
+        "call": None
+        if not calls
+        else {
+            "status": calls[-1].status,
+            "transcript": calls[-1].transcript or [],
+            "duration_seconds": calls[-1].duration_seconds,
+        },
         "finished": analysis_out is not None,
     }
+
+
+@router.get("/sessions/{session_id}", summary="Everything that happened to one demo session")
+async def demo_session(session_id: uuid.UUID, db: SessionDep) -> dict:
+    tenant = await _demo_tenant(db)
+    view = await _session_view(db, tenant.id, session_id)
+    if view is None:
+        raise ApiError(404, "session_not_found", "No such demo session")
+    return view
+
+
+@router.get(
+    "/sessions/{session_id}/stream",
+    summary="The same timeline, pushed live (Server-Sent Events)",
+    response_class=StreamingResponse,
+)
+async def demo_session_stream(session_id: uuid.UUID, db: SessionDep) -> StreamingResponse:
+    """Server-Sent Events: one long HTTP response the server keeps writing to. The browser
+    gets each new step the moment the worker records it, without polling.
+
+    Each check opens a short-lived DB session, so a slow viewer never holds a connection.
+    The stream ends when the analysis is done, or after 6 minutes."""
+    tenant = await _demo_tenant(db)
+    if await _session_view(db, tenant.id, session_id) is None:
+        raise ApiError(404, "session_not_found", "No such demo session")
+
+    async def events():
+        last, waited = None, 0.0
+        while waited < get_settings().demo_stream_seconds:
+            async with SessionFactory() as s:
+                view = await _session_view(s, tenant.id, session_id)
+            # jsonable_encoder: ISO 8601 timestamps ("2026-10-15T20:40:55Z"), the same as the JSON
+            # routes. str(datetime) gives "2026-10-15 20:40:55", which Safari can't parse.
+            payload = json.dumps(jsonable_encoder(view))
+            digest = hashlib.sha1(payload.encode()).hexdigest()
+            if digest != last:  # send only when something changed
+                last = digest
+                yield f"event: update\ndata: {payload}\n\n"
+            if view and view["finished"]:
+                yield "event: done\ndata: {}\n\n"
+                return
+            await asyncio.sleep(1)
+            waited += 1
+            if int(waited) % 15 == 0:
+                yield ": keep-alive\n\n"  # a comment line: stops proxies closing an idle stream
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/calls", summary="Recent analysed calls in the demo tenant")
+async def demo_calls(db: SessionDep, limit: int = 25) -> list[dict]:
+    tenant = await _demo_tenant(db)
+    rows = await db.execute(
+        select(Call, CallAnalysis, OnboardingSession)
+        .join(CallAnalysis, CallAnalysis.call_id == Call.id)
+        .join(OnboardingSession, OnboardingSession.id == Call.session_id)
+        .where(Call.tenant_id == tenant.id, CallAnalysis.status == "done")
+        .order_by(Call.placed_at.desc())
+        .limit(max(1, min(limit, 100)))
+    )
+    out = []
+    for call, analysis, session in rows:
+        r = analysis.result or {}
+        out.append({
+            "id": str(call.id),
+            "name": session.customer.name,
+            "language": r.get("spoken_language") or session.customer.preferred_language,
+            "step": session.dropped_at_step,
+            "placed_at": call.placed_at,
+            "duration_seconds": call.duration_seconds,
+            "outcome": r.get("outcome"),
+            "reason": r.get("dropoff_reason"),
+            "do_not_call": r.get("do_not_call"),
+            "callback_requested_at": r.get("callback_requested_at"),
+            "summary": r.get("summary"),
+            "source": analysis.source,
+            "recovered": session.recovered_at is not None,
+        })  # fmt: skip
+    return out
+
+
+@router.get("/calls/{call_id}", summary="One demo call: transcript, analysis, webhooks")
+async def demo_call(call_id: uuid.UUID, db: SessionDep) -> dict:
+    tenant = await _demo_tenant(db)
+    call = await db.scalar(select(Call).where(Call.id == call_id, Call.tenant_id == tenant.id))
+    if call is None:
+        raise ApiError(404, "call_not_found", "No such demo call")
+    analysis = await db.scalar(select(CallAnalysis).where(CallAnalysis.call_id == call.id))
+    hooks = await db.scalars(select(CallWebhookEvent).where(CallWebhookEvent.call_id == call.id)
+                             .order_by(CallWebhookEvent.received_at))  # fmt: skip
+    session = await db.get(OnboardingSession, call.session_id)
+    return {
+        "id": str(call.id),
+        "name": session.customer.name,
+        "phone": mask_phone(session.customer.phone),
+        "step": session.dropped_at_step,
+        "status": call.status,
+        "placed_at": call.placed_at,
+        "duration_seconds": call.duration_seconds,
+        "transcript": call.transcript or [],
+        "webhooks": [{"type": h.type, "at": h.received_at, "effect": h.effect} for h in hooks],
+        "analysis": None if analysis is None else {
+            "source": analysis.source, "model": analysis.model,
+            "prompt_version": analysis.prompt_version, "latency_ms": analysis.latency_ms,
+            "result": analysis.result, "actions": analysis.actions,
+            "notes": analysis.guardrail_notes, "redactions": analysis.redactions,
+        },
+    }  # fmt: skip

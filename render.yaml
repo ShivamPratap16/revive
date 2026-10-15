@@ -39,6 +39,10 @@ services:
         value: "5"
       - key: SIM_TIME_SCALE
         value: "0.2"
+      # The public demo tenant's key (already in the README). Pre-filled in /docs, so
+      # "Test Request" works immediately. It can only reach the demo tenant.
+      - key: DEMO_PUBLIC_KEY
+        value: rv_live_5fubuSFUQFHEsbTEKXHgVzzoYH9eACRhYnZcBtc9_zo
 
   - type: keyvalue
     name: revive-redis

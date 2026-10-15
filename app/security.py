@@ -10,7 +10,8 @@ import hmac
 import secrets
 from typing import Annotated
 
-from fastapi import Depends, Header
+from fastapi import Depends, Security
+from fastapi.security import APIKeyHeader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,9 +30,19 @@ def hash_api_key(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+# Declared as a security scheme (not a plain header parameter), so the API docs show an
+# "Authorize" button and every protected endpoint is marked with a lock.
+api_key_header = APIKeyHeader(
+    name="X-API-Key",
+    scheme_name="ApiKey",
+    description="Your tenant key, e.g. `rv_live_...`. The public demo key is in the README.",
+    auto_error=False,  # we raise our own error format instead of FastAPI's default
+)
+
+
 async def current_tenant(
     session: Annotated[AsyncSession, Depends(get_session)],
-    x_api_key: Annotated[str | None, Header()] = None,
+    x_api_key: Annotated[str | None, Security(api_key_header)] = None,
 ) -> Tenant:
     """FastAPI dependency: any route that declares it requires a valid X-API-Key header."""
     if not x_api_key:

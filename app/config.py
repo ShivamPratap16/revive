@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     demo_tenant_name: str = "Demo Fintech"
     demo_try_per_visitor: int = 3
     demo_try_per_hour: int = 30
+    demo_stream_seconds: int = 360  # longest a live-demo event stream stays open
+    # The demo tenant's key, if you choose to publish it: pre-filled in /docs.
+    demo_public_key: str | None = None
 
     # Call analysis (Phase 4). Without a key, the rule-based analyzer is used.
     gemini_api_key: str | None = None

@@ -64,12 +64,13 @@ async def test_try_then_watch_the_timeline(client, demo_tenant):
     run = r.json()
     view = (await client.get(f"/v1/demo/sessions/{run['session_id']}")).json()
     assert view["session"]["phone"].endswith("1111")  # the simulator's always-answers number
-    assert [x["kind"] for x in view["timeline"]] == ["event"]
+    # Detection runs immediately on /try, so the visitor doesn't wait for the cron tick
+    assert [x["kind"] for x in view["timeline"]] == ["event", "detect"]
     assert view["finished"] is False
+    assert await detect_dropoffs(now=datetime.now(UTC)) == 0  # the cron run finds nothing left
 
-    # The real worker steps, time-travelled: detect, then send the nudge
-    now = datetime.now(UTC) + timedelta(minutes=1)
-    await detect_dropoffs(now=now)
+    # The dispatcher's next tick sends the nudge
+    now = datetime.now(UTC) + timedelta(seconds=10)
     for attempt_id in await claim(now):
         await deliver_attempt(attempt_id, channels(), now=now)
     view = (await client.get(f"/v1/demo/sessions/{run['session_id']}")).json()
@@ -90,10 +91,30 @@ async def test_try_is_rate_limited_per_visitor(client, demo_tenant):
 
 async def test_landing_page(client):
     r = await client.get("/")
-    assert r.status_code == 200 and "Watch it work" in r.text
+    assert r.status_code == 200 and "Revive" in r.text
 
 
 def test_magic_number_always_answers():
     rng = random.Random(3)
     outcomes = {scenarios.pick(rng, topic="otp", answered_only=True).outcome for _ in range(200)}
     assert outcomes == {"completed"}
+
+
+async def test_stream_sends_the_timeline(client, demo_tenant, monkeypatch):
+    # The in-process test client buffers whole responses, so keep the stream short.
+    monkeypatch.setattr(get_settings(), "demo_stream_seconds", 2)
+    run = (await client.post("/v1/demo/try")).json()
+    r = await client.get(f"/v1/demo/sessions/{run['session_id']}/stream")
+    assert r.headers["content-type"].startswith("text/event-stream")
+    lines = r.text.splitlines()
+    assert lines[0] == "event: update"
+    assert '"kind": "detect"' in lines[1]
+    assert '"at": "20' in lines[1] and "T" in lines[1].split('"at": "')[1][:12]  # ISO 8601
+    assert lines.count("event: update") == 1  # unchanged state is not re-sent
+
+
+async def test_calls_endpoints_only_show_demo_calls(client, demo_tenant):
+    assert (await client.get("/v1/demo/calls")).json() == []
+    import uuid
+
+    assert (await client.get(f"/v1/demo/calls/{uuid.uuid4()}")).status_code == 404

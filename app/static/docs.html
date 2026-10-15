@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Revive API Reference</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+  <style>
+    body { margin: 0; background: #07090c; }
+    .back {
+      position: fixed; z-index: 1000; right: 16px; bottom: 16px;
+      font: 500 13px Geist, system-ui, sans-serif; color: #e8eaed; text-decoration: none;
+      background: #11161d; border: 1px solid rgba(255,255,255,.1); border-radius: 999px; padding: 8px 14px;
+    }
+    .back:hover { border-color: #ffb224; color: #ffb224 }
+    .scalar-mcp-layer, .agent-button-container { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <a class="back" href="/">← Revive home</a>
+  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.72.3/dist/browser/standalone.js"></script>
+  <script>
+    const config = __REVIVE_CONFIG__;
+    // Same design language as the web app: deep ink, saffron accent, Geist.
+    const customCss = `
+      .dark-mode {
+        --scalar-background-1: #07090c;
+        --scalar-background-2: #0d1117;
+        --scalar-background-3: #161c25;
+        --scalar-background-accent: rgba(255, 178, 36, 0.10);
+        --scalar-color-1: #e8eaed;
+        --scalar-color-2: #9aa3ae;
+        --scalar-color-3: #6b7480;
+        --scalar-color-accent: #ffb224;
+        --scalar-border-color: rgba(255, 255, 255, 0.08);
+        --scalar-button-1: #ffb224;
+        --scalar-button-1-color: #07090c;
+        --scalar-button-1-hover: #ffc457;
+        --scalar-color-green: #3fb950;
+        --scalar-color-red: #f85149;
+        --scalar-color-yellow: #ffb224;
+        --scalar-color-blue: #58a6ff;
+        --scalar-color-orange: #ff8a3d;
+        --scalar-color-purple: #a78bfa;
+      }
+      .light-mode, .dark-mode {
+        --scalar-font: "Geist", system-ui, sans-serif;
+        --scalar-font-code: "Geist Mono", ui-monospace, monospace;
+        --scalar-radius: 8px; --scalar-radius-lg: 12px; --scalar-radius-xl: 14px;
+      }
+      .t-doc__sidebar, .sidebar { --scalar-sidebar-background-1: #0a0d12; --scalar-sidebar-color-active: #ffb224;
+        --scalar-sidebar-item-active-background: rgba(255, 178, 36, 0.08); }
+    `;
+    const options = {
+      url: "/openapi.json",
+      // Examples show the real host, so a copied curl command works as-is.
+      baseServerURL: window.location.origin,
+      theme: "none",
+      layout: "modern",
+      forceDarkModeState: "dark",
+      hideDarkModeToggle: true,
+      withDefaultFonts: false,
+      customCss,
+      defaultHttpClient: { targetKey: "shell", clientKey: "curl" },
+      metaData: { title: "Revive API Reference" },
+      // Revive's docs, not an advert for the docs tool: no vendor toolbar, AI or MCP prompts.
+      showToolbar: "never",
+      showDeveloperTools: "never",
+      mcp: { disabled: true },
+      agent: { disabled: true },
+    };
+    if (config.demoKey) {
+      options.authentication = {
+        preferredSecurityScheme: "ApiKey",
+        securitySchemes: { ApiKey: { value: config.demoKey } },
+      };
+    }
+    Scalar.createApiReference("#app", options);
+
+    // This Scalar version renders a few vendor features despite the options above. The MCP
+    // and agent panels have stable classes (hidden in CSS); the sidebar "Ask AI" button is
+    // matched by its own label text whenever Scalar renders.
+    const hideAskAi = () => {
+      for (const b of document.querySelectorAll("#app aside button")) {
+        const label = [...b.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent.trim()).join("");
+        if (label === "Ask AI") b.style.display = "none";
+      }
+    };
+    new MutationObserver(hideAskAi).observe(document.getElementById("app"), { childList: true, subtree: true });
+  </script>
+</body>
+</html>

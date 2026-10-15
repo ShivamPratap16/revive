@@ -240,7 +240,8 @@ async def process_analysis(
         )
         if do_not_call and customer.phone:
             skipped = await add_to_dnd(db, call.tenant_id, customer.phone, "requested_on_call")
-            actions.append(f"added number to DND; skipped {skipped} scheduled call(s)")
+            note = f"; cancelled {skipped} scheduled call(s)" if skipped else ""
+            actions.append(f"added number to DND{note}")
 
         callback_local, problem = parse_callback(
             insight.callback_requested_at, call_local, policy.timezone

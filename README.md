@@ -9,13 +9,14 @@ Revive notices, nudges them in the app, calls them with a voice agent, reads the
 Gemini, and acts on it: *"shaam ko 6 baje ke baad karo"* becomes a 6pm call, and
 *"please mujhe dobara call mat karna"* puts the number on the do-not-disturb list.
 
-Python 3.13 · FastAPI · async SQLAlchemy 2.0 · PostgreSQL · Redis · arq · Gemini · Docker · GitHub Actions
+Python 3.13 · FastAPI · async SQLAlchemy 2.0 · PostgreSQL · Redis · arq · Gemini · React + TypeScript · Docker · GitHub Actions
 
 ### Live demo: [revive-h920.onrender.com](https://revive-h920.onrender.com)
 
-Open it and press **Watch it work live**: it creates a user stuck in KYC, and over ~90 seconds you see
-the real background jobs pick them up, a (simulated) phone call with signed webhooks, the transcript,
-and Gemini's analysis and the action Revive took. The [dashboard](https://revive-h920.onrender.com/dashboard)
+Open it and press **Start a live run**: it creates a user stuck in KYC, and over about a minute you watch,
+side by side, what the user sees on their phone (the error, the nudge, the AI call with live captions) and
+what happens behind the scenes (the architecture lighting up, events streamed from the server over SSE),
+ending with Gemini's analysis and the action Revive took. The [dashboard](https://revive-h920.onrender.com/dashboard)
 shows a simulated month of users. No key needed for either.
 
 For the API itself, use the demo key `rv_live_5fubuSFUQFHEsbTEKXHgVzzoYH9eACRhYnZcBtc9_zo`. Paste it on the dashboard, or click **Authorize** on the
@@ -195,6 +196,8 @@ app/
 simulator/        fake voice provider with realistic Hinglish/Hindi/English calls and chaos options
 migrations/       Alembic
 tests/            unit, integration and end-to-end tests
+web/              React + TypeScript + Tailwind site (landing page, live demo, dashboard),
+                  built by Vite and served by FastAPI; API reference at /docs (Scalar)
 ```
 
 ## Known limits

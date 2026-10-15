@@ -86,6 +86,35 @@ class IngestBatch(BaseModel):
     # Mobile SDKs buffer events and send them together, so the API takes a batch.
     events: list[IngestEvent] = Field(min_length=1)
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "events": [
+                        {
+                            "event_id": "evt_01J9ZK3Q",
+                            "session_id": "app_sess_9f2",
+                            "type": "step_completed",
+                            "step": "pan_verification",
+                            "occurred_at": "2026-10-15T10:02:00+05:30",
+                            "user": {"id": "kb_user_42", "phone": "+919812345678",
+                                     "name": "Ravi Kumar", "language": "hinglish"},
+                        },
+                        {
+                            "event_id": "evt_01J9ZK4R",
+                            "session_id": "app_sess_9f2",
+                            "type": "step_failed",
+                            "step": "aadhaar_otp",
+                            "error_code": "OTP_NOT_RECEIVED",
+                            "occurred_at": "2026-10-15T10:05:00+05:30",
+                            "user": {"id": "kb_user_42"},
+                        },
+                    ]
+                }
+            ]
+        }
+    )  # fmt: skip
+
 
 class EventResultStatus(StrEnum):
     ACCEPTED = "accepted"

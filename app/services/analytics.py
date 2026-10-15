@@ -7,13 +7,16 @@ to produce a dozen numbers. The database is built for exactly this, next to the 
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from datetime import date as date_
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
-from sqlalchemy import Float, and_, cast, func, select
+from sqlalchemy import Date, Float, and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.journey import STEP_INDEX, STEP_ORDER, Step
-from app.models import Call, CallAnalysis, Customer, OnboardingSession, OutreachAttempt
+from app.domain.policy import policy_of
+from app.models import Call, CallAnalysis, Customer, OnboardingSession, OutreachAttempt, Tenant
 
 
 class FunnelStep(BaseModel):
@@ -69,6 +72,13 @@ class InsightStats(BaseModel):
     avg_llm_latency_ms: float | None
 
 
+class DayRow(BaseModel):
+    date: date_
+    started: int
+    dropped: int
+    recovered: int
+
+
 class Summary(BaseModel):
     period_days: int
     since: datetime
@@ -80,6 +90,7 @@ class Summary(BaseModel):
     calls: CallStats
     insights: InsightStats
     dead_letter: int
+    daily: list[DayRow]
 
 
 def _rate(part: int, whole: int) -> float:
@@ -223,6 +234,30 @@ async def summary(db: AsyncSession, tenant_id: uuid.UUID, days: int) -> Summary:
         avg_llm_latency_ms=round(llm_latency) if llm_latency else None,
     )
 
+    # --- daily trend, bucketed by calendar day in the tenant's own time zone -----------
+    tz = policy_of((await db.get(Tenant, tenant_id)).policy).timezone
+
+    async def per_day(col, *conds) -> dict:
+        day = cast(func.timezone(tz, col), Date)
+        rows = await db.execute(
+            select(day, func.count()).where(in_period, col.is_not(None), *conds).group_by(day)
+        )
+        return dict(rows.all())
+
+    started_by_day = await per_day(S.started_at)
+    dropped_by_day = await per_day(S.dropped_off_at)
+    recovered_by_day = await per_day(S.recovered_at)
+    today = datetime.now(UTC).astimezone(ZoneInfo(tz)).date()
+    daily = [
+        DayRow(
+            date=d,
+            started=started_by_day.get(d, 0),
+            dropped=dropped_by_day.get(d, 0),
+            recovered=recovered_by_day.get(d, 0),
+        )
+        for d in (today - timedelta(days=i) for i in range(min(days, 90) - 1, -1, -1))
+    ]
+
     dead = await db.scalar(
         select(func.count()).where(
             A.tenant_id == tenant_id, A.status == "dead", A.created_at >= since
@@ -240,4 +275,5 @@ async def summary(db: AsyncSession, tenant_id: uuid.UUID, days: int) -> Summary:
         calls=calls,
         insights=insights,
         dead_letter=dead,
+        daily=daily,
     )

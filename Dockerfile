@@ -1,4 +1,14 @@
-# One image, three roles (API, worker, provider simulator), chosen by the command.
+# Stage 1: build the web app (React + Vite). Only its static output reaches the final
+# image: no Node.js, no node_modules in production.
+FROM node:22-alpine AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY web/ ./
+RUN npm run build
+
+# Stage 2: the Python app. One image, three roles (API, worker, provider simulator),
+# chosen by the command.
 FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -20,6 +30,7 @@ COPY migrations ./migrations
 COPY simulator ./simulator
 COPY app ./app
 COPY scripts ./scripts
+COPY --from=web /web/dist ./web/dist
 
 # Don't run as root: if the app is ever compromised, the attacker isn't root in the container.
 RUN useradd --create-home --uid 10001 revive
