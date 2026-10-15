@@ -18,6 +18,16 @@ class Settings(BaseSettings):
     max_clock_skew_seconds: int = 300
     max_events_per_batch: int = 100
 
+    # Worker (Phase 2)
+    lease_seconds: int = 300  # how long a worker may hold an attempt before it's reclaimed
+    delivery_timeout_seconds: float = 10
+    retry_base_seconds: float = 30
+    retry_cap_seconds: float = 3600
+    detector_batch_size: int = 500
+    dispatch_batch_size: int = 100
+    # Simulated providers: probability that a send fails temporarily (to watch retries).
+    sim_failure_rate: float = 0.0
+
 
 @lru_cache
 def get_settings() -> Settings:

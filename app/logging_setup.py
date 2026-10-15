@@ -7,6 +7,7 @@ request" is a single search.
 
 import json
 import logging
+import sys
 import time
 import uuid
 from contextvars import ContextVar
@@ -32,16 +33,22 @@ class JsonFormatter(logging.Formatter):
         entry.update(getattr(record, "fields", {}))
         if record.exc_info:
             entry["exc"] = self.formatException(record.exc_info)
-        return json.dumps(entry, default=str)
+        return json.dumps(entry, default=str, ensure_ascii=False)  # keep Hindi readable
 
 
 def configure_logging(level: str) -> None:
+    # Windows consoles and redirected output default to cp1252, which can't encode Hindi.
+    # Force UTF-8 so a log line with Devanagari text can't crash the logger.
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level)
     logging.getLogger("uvicorn.access").disabled = True  # our middleware logs requests
+    # arq installs its own plain-text handler; drop it so each line is logged once, as JSON.
+    logging.getLogger("arq").handlers.clear()
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):

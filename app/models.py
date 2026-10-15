@@ -39,6 +39,8 @@ class Tenant(Base):
     api_key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     # First characters of the key (e.g. "rv_live_a1b2"), safe to show in dashboards and logs.
     api_key_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Outreach rules (app.domain.policy.OutreachPolicy). NULL means "use the defaults".
+    policy: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = _now()
 
 
@@ -84,6 +86,14 @@ class OnboardingSession(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Drop-off tracking (Phase 2). drop_round counts how many times this session went
+    # idle: a user can drop, come back, and drop again, and each round gets its own plan.
+    drop_round: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    dropped_off_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    recovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Deliberately not a foreign key: outreach_attempts already points at sessions, and two
+    # tables pointing at each other complicate inserts and deletes for little gain.
+    recovered_by_attempt_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = _now()
 
     customer: Mapped[Customer] = relationship(lazy="joined")
@@ -117,3 +127,68 @@ class OnboardingEvent(Base):
     received_at: Mapped[datetime] = _now()
     clock_skew_corrected: Mapped[bool] = mapped_column(nullable=False, default=False)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+
+
+class DndEntry(Base):
+    """Numbers that must never get a voice call: TRAI's DND registry or a user's own request."""
+
+    __tablename__ = "dnd_entries"
+    __table_args__ = (UniqueConstraint("tenant_id", "phone"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = _now()
+
+
+class OutreachAttempt(Base):
+    """One planned contact with a user: an in-app nudge or a voice call.
+
+    This table doubles as a durable job queue (the "transactional outbox"): the detector
+    writes rows in the same transaction that marks the session dropped off, and the
+    dispatcher later claims due rows and delivers them. Redis can lose a job; a committed
+    row can't be lost.
+
+    Lifecycle:
+        scheduled -> sending -> sent
+                         |-> scheduled (temporary failure, retried with backoff)
+                         |-> dead      (gave up: the dead-letter queue)
+        scheduled -> cancelled (user came back) | skipped (DND, no phone)
+    """
+
+    __tablename__ = "outreach_attempts"
+    __table_args__ = (
+        # The detector may run twice for the same drop-off (two workers, a retry after a
+        # crash). This constraint makes the plan impossible to create twice.
+        UniqueConstraint("session_id", "drop_round", "sequence_no", name="uq_attempt_plan"),
+        Index("ix_attempts_status_due", "status", "scheduled_for"),  # dispatcher's query
+        Index("ix_attempts_customer_sent", "customer_id", "channel", "sent_at"),  # daily cap
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("onboarding_sessions.id"), nullable=False
+    )
+    customer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("customers.id"), nullable=False)
+    drop_round: Mapped[int] = mapped_column(Integer, nullable=False)
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    status_reason: Mapped[str | None] = mapped_column(String(64))
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # While "sending", the worker holds a lease. If it crashes, the lease expires and
+    # the reaper puts the attempt back to "scheduled". Same idea as an SQS visibility timeout.
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tries: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    message: Mapped[str | None] = mapped_column(String(1000))
+    provider_ref: Mapped[str | None] = mapped_column(String(128))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _now()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    session: Mapped[OnboardingSession] = relationship(lazy="joined")

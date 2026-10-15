@@ -11,8 +11,8 @@ from sqlalchemy import and_, or_, select
 from app.domain.journey import SessionStatus, Step
 from app.errors import ApiError
 from app.logging_setup import mask_phone
-from app.models import OnboardingEvent, OnboardingSession
-from app.schemas import CustomerOut, EventOut, SessionDetailOut, SessionOut
+from app.models import OnboardingEvent, OnboardingSession, OutreachAttempt
+from app.schemas import AttemptOut, CustomerOut, EventOut, SessionDetailOut, SessionOut
 from app.security import SessionDep, TenantDep
 
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
@@ -35,6 +35,10 @@ def _to_out(s: OnboardingSession) -> dict:
         "started_at": s.started_at,
         "last_activity_at": s.last_activity_at,
         "completed_at": s.completed_at,
+        "drop_round": s.drop_round,
+        "dropped_off_at": s.dropped_off_at,
+        "recovered_at": s.recovered_at,
+        "recovered_by_attempt_id": s.recovered_by_attempt_id,
         "customer": CustomerOut(
             external_user_id=s.customer.external_user_id,
             name=s.customer.name,
@@ -111,4 +115,13 @@ async def get_session_detail(session_id: uuid.UUID, tenant: TenantDep, db: Sessi
         .where(OnboardingEvent.session_id == s.id)
         .order_by(OnboardingEvent.occurred_at, OnboardingEvent.received_at)
     )
-    return SessionDetailOut(**_to_out(s), events=[EventOut.model_validate(e) for e in events])
+    attempts = await db.scalars(
+        select(OutreachAttempt)
+        .where(OutreachAttempt.session_id == s.id)
+        .order_by(OutreachAttempt.drop_round, OutreachAttempt.sequence_no)
+    )
+    return SessionDetailOut(
+        **_to_out(s),
+        events=[EventOut.model_validate(e) for e in events],
+        outreach=[AttemptOut.model_validate(a) for a in attempts],
+    )

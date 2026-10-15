@@ -17,7 +17,7 @@ import uuid
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,7 +30,9 @@ from app.domain.journey import (
     Step,
     apply_event,
 )
-from app.models import Customer, OnboardingEvent, OnboardingSession
+from app.domain.policy import OutreachPolicy, policy_of
+from app.domain.scheduling import AttemptStatus
+from app.models import Customer, OnboardingEvent, OnboardingSession, OutreachAttempt, Tenant
 from app.schemas import EventResult, EventResultStatus, IngestEvent, IngestResponse
 
 log = logging.getLogger(__name__)
@@ -151,10 +153,56 @@ def _save_state(s: OnboardingSession, state: SessionState) -> None:
     s.completed_at = state.completed_at
 
 
+async def _react_to_status_change(
+    db: AsyncSession,
+    session: OnboardingSession,
+    before: SessionStatus,
+    after: SessionState,
+    policy: OutreachPolicy,
+) -> None:
+    """Side effects of a session changing status, in the same transaction as the change."""
+    if before == after.status:
+        return
+
+    if before == SessionStatus.DROPPED_OFF:
+        # The user came back on their own (or finished). Calling them now about a step
+        # they've already done would be annoying, so cancel anything still pending.
+        reason = "completed" if after.status == SessionStatus.COMPLETED else "user_resumed"
+        await db.execute(
+            update(OutreachAttempt)
+            .where(
+                OutreachAttempt.session_id == session.id,
+                OutreachAttempt.status == AttemptStatus.SCHEDULED,
+            )
+            .values(status=AttemptStatus.CANCELLED, status_reason=reason)
+        )
+
+    if after.status == SessionStatus.COMPLETED and after.completed_at is not None:
+        # Last-touch attribution: credit the most recent nudge/call sent before completion,
+        # if it was recent enough to plausibly have caused it.
+        since = after.completed_at - timedelta(hours=policy.attribution_window_hours)
+        last_touch = await db.scalar(
+            select(OutreachAttempt.id)
+            .where(
+                OutreachAttempt.session_id == session.id,
+                OutreachAttempt.status == AttemptStatus.SENT,
+                OutreachAttempt.sent_at <= after.completed_at,
+                OutreachAttempt.sent_at >= since,
+            )
+            .order_by(OutreachAttempt.sent_at.desc())
+            .limit(1)
+        )
+        if last_touch is not None:
+            session.recovered_at = after.completed_at
+            session.recovered_by_attempt_id = last_touch
+
+
 async def ingest_batch(
-    db: AsyncSession, tenant_id: uuid.UUID, events: list[IngestEvent], now: datetime | None = None
+    db: AsyncSession, tenant: Tenant, events: list[IngestEvent], now: datetime | None = None
 ) -> IngestResponse:
     now = now or datetime.now(UTC)
+    tenant_id = tenant.id
+    policy = policy_of(tenant.policy)
     customer_ids = await _upsert_customers(db, tenant_id, events)
 
     # Group by session. Within a session, apply events in the order they happened,
@@ -173,6 +221,7 @@ async def ingest_batch(
             db, tenant_id, ext_session_id, customer_ids[first_event.user.id], items[0][2]
         )
         state = _state_of(session)
+        status_before = state.status
 
         for index, ev, at, corrected in items:
             inserted_id = await db.scalar(
@@ -215,6 +264,7 @@ async def ingest_batch(
             )
 
         _save_state(session, state)
+        await _react_to_status_change(db, session, status_before, state, policy)
 
     await db.commit()
 

@@ -11,6 +11,9 @@ dependencies = [
     "alembic>=1.14",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
+    "arq>=0.26",
+    "redis>=5.2",
+    "tzdata>=2024.2",  # Windows has no built-in timezone database; zoneinfo needs this
 ]
 
 [project.optional-dependencies]
@@ -40,3 +43,6 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+"migrations/*" = ["E501"]  # generated code

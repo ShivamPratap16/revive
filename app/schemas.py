@@ -124,6 +124,10 @@ class SessionOut(BaseModel):
     started_at: datetime
     last_activity_at: datetime
     completed_at: datetime | None
+    drop_round: int
+    dropped_off_at: datetime | None
+    recovered_at: datetime | None
+    recovered_by_attempt_id: uuid.UUID | None
     customer: CustomerOut
 
 
@@ -139,8 +143,40 @@ class EventOut(BaseModel):
     clock_skew_corrected: bool
 
 
+class AttemptOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    session_id: uuid.UUID
+    drop_round: int
+    sequence_no: int
+    channel: str
+    status: str
+    status_reason: str | None
+    scheduled_for: datetime
+    tries: int
+    last_error: str | None
+    message: str | None
+    provider_ref: str | None
+    sent_at: datetime | None
+
+
 class SessionDetailOut(SessionOut):
     events: list[EventOut]
+    outreach: list[AttemptOut]
+
+
+class DndIn(BaseModel):
+    phone: Phone
+    reason: str = Field(default="customer_request", min_length=1, max_length=64)
+
+
+class DndOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    phone_masked: str
+    reason: str
+    created_at: datetime
 
 
 class ErrorBody(BaseModel):

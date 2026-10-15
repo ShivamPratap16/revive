@@ -22,4 +22,4 @@ async def post_events(batch: IngestBatch, tenant: TenantDep, db: SessionDep) -> 
     limit = get_settings().max_events_per_batch
     if len(batch.events) > limit:
         raise ApiError(413, "batch_too_large", f"Send at most {limit} events per request")
-    return await ingest_batch(db, tenant.id, batch.events)
+    return await ingest_batch(db, tenant, batch.events)

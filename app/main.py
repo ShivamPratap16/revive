@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import events, health, sessions
+from app.api import events, health, outreach, sessions
 from app.config import get_settings
 from app.db import engine
 from app.errors import register_error_handlers
@@ -29,6 +29,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(events.router)
     app.include_router(sessions.router)
+    app.include_router(outreach.router)
     return app
 
 
