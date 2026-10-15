@@ -43,7 +43,9 @@ from app.models import Call, Customer, DndEntry, OutreachAttempt, Tenant
 log = logging.getLogger(__name__)
 
 
-async def claim_due(db: AsyncSession, now: datetime, limit: int | None = None) -> list[tuple]:
+async def claim_due(
+    db: AsyncSession, now: datetime, limit: int | None = None, tenant_id: uuid.UUID | None = None
+) -> list[tuple]:
     """Atomically take ownership of due attempts. Returns (id, lease_expires_at) pairs.
 
     UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED) is the standard Postgres
@@ -55,6 +57,8 @@ async def claim_due(db: AsyncSession, now: datetime, limit: int | None = None) -
         .where(
             OutreachAttempt.status == AttemptStatus.SCHEDULED,
             OutreachAttempt.scheduled_for <= now,
+            # Optional: one tenant only (the demo seeder uses this to stay in its own lane).
+            OutreachAttempt.tenant_id == tenant_id if tenant_id else True,
         )
         .order_by(OutreachAttempt.scheduled_for)
         .limit(limit or get_settings().dispatch_batch_size)

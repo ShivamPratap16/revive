@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revive Dashboard</title>
+<style>
+/* One page, no build step, no libraries: plain HTML bars are accessible, crisp, and easy to read. */
+:root {
+  color-scheme: light;
+  --bg: #f4f6f6; --surface: #fcfcfb; --line: #dfe4e3;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #6f6e69;
+  --series-1: #2a78d6;   /* dropped / main measure (blue) */
+  --series-2: #eb6834;   /* recovered (orange) - adjacent slot, validated pair */
+  --good: #008300; --critical: #e34948;
+  --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { color-scheme: dark;
+    --bg: #111312; --surface: #1a1a19; --line: #2c2e2c;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #9a998f;
+    --series-1: #3987e5; --series-2: #d95926; --good: #3fae3f; --critical: #e66767; }
+}
+* { box-sizing: border-box }
+body { margin: 0; background: var(--bg); color: var(--text-primary); font: 15px/1.5 var(--font);
+  padding: 24px max(16px, env(safe-area-inset-left)) 48px max(16px, env(safe-area-inset-right)) }
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; gap: 20px }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: end; justify-content: space-between }
+h1 { font-size: 24px; margin: 0 } h1 small { font-size: 14px; color: var(--text-muted); font-weight: 400 }
+h2 { font-size: 15px; margin: 0 0 12px; color: var(--text-secondary); font-weight: 600 }
+.controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center }
+input, select, button { font: inherit; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--text-primary) }
+input { width: 22ch } button { cursor: pointer; background: var(--series-1); color: #fff; border-color: transparent }
+:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px }
+.status { color: var(--text-muted); font-size: 13px; min-height: 1.5em }
+.status.error { color: var(--critical) }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px }
+.tile .label { font-size: 13px; color: var(--text-secondary) }
+.tile .value { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2 }
+.tile .sub { font-size: 13px; color: var(--text-muted) }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; min-width: 0 }
+.legend { display: flex; gap: 16px; font-size: 13px; color: var(--text-secondary); margin: -4px 0 10px }
+.legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px }
+.bars { display: grid; gap: 8px }
+.row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 10px; align-items: center }
+.row .name { font-size: 13px; color: var(--text-secondary); overflow-wrap: anywhere }
+.track { display: grid; gap: 2px }
+.bar { height: 14px; border-radius: 0 4px 4px 0; min-width: 2px; position: relative; display: flex; align-items: center }
+.bar span { position: absolute; left: calc(100% + 6px); font-size: 12px; color: var(--text-secondary);
+  white-space: nowrap; font-variant-numeric: tabular-nums }
+.bar:hover, .bar:focus { filter: brightness(1.12); outline: none }
+.s1 { background: var(--series-1) } .s2 { background: var(--series-2) }
+.plot { padding-right: 90px }   /* room for the value labels at the end of bars */
+table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums }
+th, td { text-align: left; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line) }
+th { color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em }
+.empty { color: var(--text-muted); font-size: 14px }
+#tip { position: fixed; pointer-events: none; background: var(--text-primary); color: var(--surface);
+  font-size: 12px; padding: 6px 8px; border-radius: 4px; opacity: 0; transition: opacity .1s; z-index: 10 }
+#tip strong { font-size: 13px }
+@media (max-width: 520px) { .row { grid-template-columns: 96px minmax(0, 1fr) } .plot { padding-right: 70px } }
+@media (prefers-reduced-motion: reduce) { #tip { transition: none } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Revive <small>KYC drop-off recovery</small></h1>
+    <form class="controls" id="form">
+      <label for="key" class="sr">API key</label>
+      <input id="key" type="password" placeholder="rv_live_... API key" autocomplete="off" required>
+      <select id="days" aria-label="Period">
+        <option value="7">Last 7 days</option>
+        <option value="30" selected>Last 30 days</option>
+        <option value="90">Last 90 days</option>
+      </select>
+      <button type="submit">Load</button>
+    </form>
+  </header>
+  <div class="status" id="status" role="status">Paste a tenant API key to load its numbers. (Seed demo data with <code>python -m app.demo</code>.)</div>
+
+  <section class="tiles" id="tiles" aria-label="Headline numbers"></section>
+
+  <section class="grid">
+    <div class="panel"><h2>Funnel: share of users reaching each step</h2><div class="bars plot" id="funnel"></div></div>
+    <div class="panel"><h2>Where users drop off, and how many come back</h2>
+      <div class="legend"><span><i class="s1"></i>Dropped off</span><span><i class="s2"></i>Recovered</span></div>
+      <div class="bars plot" id="drops"></div></div>
+    <div class="panel"><h2>Why they stopped (from call analysis)</h2><div class="bars plot" id="reasons"></div></div>
+    <div class="panel"><h2>Recoveries credited to</h2><div class="bars plot" id="channels"></div>
+      <h2 style="margin-top:18px">Call outcomes</h2><div class="bars plot" id="calls"></div></div>
+    <div class="panel"><h2>Recovery by language</h2><div id="langs"></div></div>
+    <div class="panel"><h2>What the calls asked for</h2><div id="asks"></div></div>
+  </section>
+</div>
+<div id="tip" role="tooltip"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const pct = (x) => `${Math.round(x * 100)}%`;
+const label = (s) => String(s).replaceAll("_", " ");
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text; return e; };   // textContent only: data never becomes HTML
+
+// Tooltip: on hover and on keyboard focus, so it works without a mouse.
+const tip = $("tip");
+function showTip(e, html) {
+  tip.replaceChildren(...html);
+  const r = (e.target.getBoundingClientRect ? e.target : e.currentTarget).getBoundingClientRect();
+  tip.style.left = Math.min(r.right + 8, innerWidth - tip.offsetWidth - 8) + "px";
+  tip.style.top = (r.top - 4) + "px";
+  tip.style.opacity = 1;
+}
+const hideTip = () => (tip.style.opacity = 0);
+
+function bar(cls, value, max, text, tipLines) {
+  const b = el("div", `bar ${cls}`);
+  b.style.width = max ? `${Math.max(0.5, (value / max) * 100)}%` : "0";
+  b.tabIndex = 0;
+  b.append(el("span", "", text));
+  const lines = () => tipLines.map(([k, v]) => { const d = el("div"); d.append(el("strong", "", v), ` ${k}`); return d; });
+  b.addEventListener("pointerenter", (e) => showTip(e, lines()));
+  b.addEventListener("focus", (e) => showTip(e, lines()));
+  b.addEventListener("pointerleave", hideTip); b.addEventListener("blur", hideTip);
+  return b;
+}
+
+function bars(target, rows) {   // rows: [{name, series:[{cls, value, text, tip}]}]
+  const box = $(target); box.replaceChildren();
+  if (!rows.length) { box.append(el("p", "empty", "No data in this period yet.")); return; }
+  const max = Math.max(...rows.flatMap((r) => r.series.map((s) => s.value)), 1);
+  for (const r of rows) {
+    const row = el("div", "row"); row.append(el("div", "name", r.name));
+    const track = el("div", "track");
+    for (const s of r.series) track.append(bar(s.cls, s.value, max, s.text, s.tip));
+    row.append(track); box.append(row);
+  }
+}
+
+function tiles(d) {
+  const s = d.sessions, c = d.calls, ins = d.insights;
+  const items = [
+    ["Users started KYC", s.started, `${s.completed} completed`],
+    ["Dropped off", s.dropped_off, `${pct(s.dropped_off / (s.started || 1))} of started`],
+    ["Recovered by Revive", s.recovered, `${pct(s.recovery_rate)} of drop-offs`],
+    ["Median time to recover", s.median_minutes_to_recover == null ? "–" :
+      (s.median_minutes_to_recover >= 120 ? `${(s.median_minutes_to_recover / 60).toFixed(1)} h` : `${Math.round(s.median_minutes_to_recover)} min`), "drop-off to completion"],
+    ["Calls answered", pct(c.answer_rate), `${c.answered} of ${c.placed} placed`],
+    ["Stop-calling requests", ins.do_not_call_requests, "auto-added to DND"],
+  ];
+  $("tiles").replaceChildren(...items.map(([l, v, sub]) => {
+    const t = el("div", "tile"); t.append(el("div", "label", l), el("div", "value", String(v)), el("div", "sub", sub)); return t;
+  }));
+}
+
+function render(d) {
+  tiles(d);
+  bars("funnel", d.funnel.map((f) => ({ name: label(f.step), series: [
+    { cls: "s1", value: f.reached, text: pct(f.pct_of_started), tip: [["users", String(f.reached)], ["of started", pct(f.pct_of_started)]] }] })));
+  bars("drops", d.dropoffs_by_step.map((x) => ({ name: label(x.step), series: [
+    { cls: "s1", value: x.dropped, text: String(x.dropped), tip: [["dropped off", String(x.dropped)]] },
+    { cls: "s2", value: x.recovered, text: `${x.recovered} (${pct(x.recovery_rate)})`, tip: [["recovered", String(x.recovered)], ["recovery rate", pct(x.recovery_rate)]] }] })));
+  const totalReasons = d.insights.top_reasons.reduce((a, r) => a + r.count, 0) || 1;
+  bars("reasons", d.insights.top_reasons.map((r) => ({ name: label(r.key), series: [
+    { cls: "s1", value: r.count, text: `${r.count} (${pct(r.count / totalReasons)})`, tip: [["calls", String(r.count)], ["of analysed", pct(r.count / totalReasons)]] }] })));
+  bars("channels", d.recovered_by_channel.map((r) => ({ name: r.key === "in_app" ? "in-app nudge" : "voice call", series: [
+    { cls: "s1", value: r.count, text: String(r.count), tip: [["recoveries", String(r.count)]] }] })));
+  bars("calls", d.calls.by_status.map((r) => ({ name: label(r.key), series: [
+    { cls: "s1", value: r.count, text: String(r.count), tip: [["calls", String(r.count)]] }] })));
+
+  const t = el("table"); const head = el("tr");
+  ["Language", "Dropped", "Recovered", "Rate"].forEach((h) => head.append(el("th", "", h)));
+  t.append(head);
+  for (const r of d.by_language) {
+    const tr = el("tr"); [r.language, r.dropped, r.recovered, pct(r.recovery_rate)].forEach((v) => tr.append(el("td", "", String(v))));
+    t.append(tr);
+  }
+  $("langs").replaceChildren(d.by_language.length ? t : el("p", "empty", "No drop-offs in this period."));
+
+  const ins = d.insights, asks = el("table");
+  [["Calls analysed", ins.analysed], ["Callbacks requested (scheduled)", ins.callbacks_requested],
+   ["Asked not to be called (DND)", ins.do_not_call_requests],
+   ["Analysed by", ins.by_source.map((b) => `${b.key}: ${b.count}`).join(", ") || "–"],
+   ["Avg Gemini latency", ins.avg_llm_latency_ms ? `${ins.avg_llm_latency_ms} ms` : "–"],
+   ["Dead-letter attempts", d.dead_letter]].forEach(([k, v]) => {
+    const tr = el("tr"); tr.append(el("td", "", k), el("td", "", String(v))); asks.append(tr); });
+  $("asks").replaceChildren(asks);
+}
+
+async function load() {
+  const key = $("key").value.trim(), status = $("status");
+  if (!key) return;
+  try { localStorage.setItem("revive_key", key); } catch {}
+  status.className = "status"; status.textContent = "Loading…";
+  try {
+    const r = await fetch(`/v1/analytics/summary?days=${$("days").value}`, { headers: { "X-API-Key": key } });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body?.error?.message || `HTTP ${r.status}`);
+    render(body);
+    status.textContent = `Sessions started since ${new Date(body.since).toLocaleDateString()}.`;
+  } catch (err) {
+    status.className = "status error"; status.textContent = `Couldn't load: ${err.message}`;
+  }
+}
+$("form").addEventListener("submit", (e) => { e.preventDefault(); load(); });
+$("days").addEventListener("change", load);
+try { const k = localStorage.getItem("revive_key"); if (k) { $("key").value = k; load(); } } catch {}
+</script>
+</body>
+</html>

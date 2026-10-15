@@ -81,6 +81,7 @@ async def detect_for_tenant(tenant_id: uuid.UUID, raw_policy: dict | None, now: 
             s.status = SessionStatus.DROPPED_OFF
             s.drop_round += 1
             s.dropped_off_at = now
+            s.dropped_at_step = s.current_step
             phone = s.customer.phone
             for p in plan_attempts(policy=policy, now=now, phone=phone, is_dnd=phone in dnd):
                 rows.append(

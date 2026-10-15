@@ -90,6 +90,9 @@ class OnboardingSession(Base):
     # idle: a user can drop, come back, and drop again, and each round gets its own plan.
     drop_round: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     dropped_off_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The step the user was stuck on when they dropped off. current_step moves on once they
+    # recover, so analytics ("where do people drop, and does outreach help?") needs this kept.
+    dropped_at_step: Mapped[str | None] = mapped_column(String(32))
     recovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Deliberately not a foreign key: outreach_attempts already points at sessions, and two
     # tables pointing at each other complicate inserts and deletes for little gain.

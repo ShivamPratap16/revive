@@ -1,3 +1,19 @@
+# docker compose up -d --build   -> the whole system: http://localhost:8000/docs
+# docker compose up -d postgres redis   -> just the databases, for local development
+
+x-app: &app
+  build: .
+  image: revive:latest
+  env_file:
+    - path: .env          # GEMINI_API_KEY lives here (optional: without it, rules are used)
+      required: false
+  environment:
+    DATABASE_URL: postgresql+asyncpg://revive:revive@postgres:5432/revive
+    REDIS_URL: redis://redis:6379/0
+    VOICE_API_URL: http://simulator:8000
+    PUBLIC_BASE_URL: http://api:8000
+  restart: unless-stopped
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -25,6 +41,42 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
+
+  # Runs the migrations once and exits. The API and worker wait for it to succeed,
+  # so they never start against an out-of-date schema.
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    <<: *app
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  worker:
+    <<: *app
+    command: ["arq", "app.worker.WorkerSettings"]
+    healthcheck:
+      disable: true   # no HTTP port; arq exits on fatal errors and restart brings it back
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  simulator:
+    <<: *app
+    command: ["uvicorn", "simulator.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      SIM_TIME_SCALE: "0.2"
+      SIM_DUPLICATE_RATE: "0.15"
+      SIM_REORDER_RATE: "0.15"
+    ports:
+      - "8099:8000"
 
 volumes:
   pgdata:

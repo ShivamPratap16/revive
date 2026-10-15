@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch cancels the run still going for the older one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Real Postgres and Redis next to the job, same as local development.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: revive
+          POSTGRES_PASSWORD: revive
+          POSTGRES_DB: revive
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U revive" --health-interval 3s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 3s --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://revive:revive@localhost:5432/revive
+      TEST_DATABASE_URL: postgresql+asyncpg://revive:revive@localhost:5432/revive_test
+      REDIS_URL: redis://localhost:6379/0
+      PYTHONUTF8: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint and format
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Migrations apply cleanly and match the models
+        run: |
+          alembic upgrade head
+          alembic check
+          alembic downgrade base
+          alembic upgrade head
+
+      - name: Create the test database
+        run: PGPASSWORD=revive psql -h localhost -U revive -c "CREATE DATABASE revive_test"
+
+      - name: Tests
+        run: pytest -q
+
+      - name: Rule-based analyzer eval (no API key needed)
+        run: python -m app.evals
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t revive:ci .
+      - name: Image starts and imports cleanly
+        run: docker run --rm revive:ci python -c "import app.main, app.worker, simulator.main; print('ok')"

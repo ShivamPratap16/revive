@@ -295,3 +295,30 @@ async def test_simulator_honours_idempotency_key(sim):
     second = await voice.send(msg)  # e.g. our retry after a timeout
     assert first == second
     await asyncio.gather(*list(sim_app.state.tasks))
+
+
+async def test_recovery_after_unanswered_call_credits_the_call(client, api_key):
+    # Regression (found via the demo analytics): after no answer, the attempt is re-queued
+    # for a re-dial and is no longer "sent". The call still happened and must get the credit,
+    # not the in-app nudge sent 30 minutes before it.
+    from app.models import OnboardingSession
+    from app.services.detector import detect_dropoffs
+
+    await stuck_on_otp(client, api_key)
+    nudge_time = T + timedelta(minutes=16)
+    await detect_dropoffs(now=nudge_time)
+    for i in await claim(nudge_time):  # only the in-app nudge is due
+        await deliver_attempt(i, channels(), now=nudge_time)
+    for i in await claim(CALL_TIME):  # the voice call
+        await deliver_attempt(i, channels(), now=CALL_TIME)
+    async with SessionFactory() as db:
+        call = await db.scalar(select(Call))
+
+    await send(client, webhook(call, "call.no_answer"))
+    assert (await attempts())[1].status == "scheduled"  # waiting to re-dial
+
+    done = ev("done", "journey_completed", None, CALL_TIME + timedelta(minutes=20))
+    await post(client, api_key, done)
+    async with SessionFactory() as db:
+        session = await db.scalar(select(OnboardingSession))
+    assert session.recovered_by_attempt_id == call.attempt_id

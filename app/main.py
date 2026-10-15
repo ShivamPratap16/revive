@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
-from app.api import calls, events, health, outreach, sessions
+from app.api import analytics, calls, events, health, outreach, sessions
 from app.config import get_settings
 from app.db import engine
 from app.errors import register_error_handlers
@@ -32,6 +34,15 @@ def create_app() -> FastAPI:
     app.include_router(outreach.router)
     app.include_router(calls.router)
     app.include_router(calls.webhooks)
+    app.include_router(analytics.router)
+
+    dashboard = Path(__file__).parent / "static" / "dashboard.html"
+
+    @app.get("/dashboard", include_in_schema=False)
+    async def _dashboard() -> FileResponse:
+        # A static page; it calls /v1/analytics/summary with the key the user pastes in.
+        return FileResponse(dashboard)
+
     return app
 
 

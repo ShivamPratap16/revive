@@ -17,7 +17,7 @@ import uuid
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, union_all, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +32,14 @@ from app.domain.journey import (
 )
 from app.domain.policy import OutreachPolicy, policy_of
 from app.domain.scheduling import AttemptStatus
-from app.models import Customer, OnboardingEvent, OnboardingSession, OutreachAttempt, Tenant
+from app.models import (
+    Call,
+    Customer,
+    OnboardingEvent,
+    OnboardingSession,
+    OutreachAttempt,
+    Tenant,
+)
 from app.schemas import EventResult, EventResultStatus, IngestEvent, IngestResponse
 
 log = logging.getLogger(__name__)
@@ -178,18 +185,25 @@ async def _react_to_status_change(
         )
 
     if after.status == SessionStatus.COMPLETED and after.completed_at is not None:
-        # Last-touch attribution: credit the most recent nudge/call sent before completion,
-        # if it was recent enough to plausibly have caused it.
+        # Last-touch attribution: credit the most recent contact before completion, if it
+        # was recent enough to plausibly have caused it. A contact is a sent nudge OR a
+        # placed call: after an unanswered call the attempt goes back to "scheduled" for a
+        # re-dial, but the call still happened and must still count.
         since = after.completed_at - timedelta(hours=policy.attribution_window_hours)
+        sent_nudges = select(
+            OutreachAttempt.id.label("attempt_id"), OutreachAttempt.sent_at.label("at")
+        ).where(
+            OutreachAttempt.session_id == session.id,
+            OutreachAttempt.status == AttemptStatus.SENT,
+        )
+        placed_calls = select(Call.attempt_id, Call.placed_at).where(
+            Call.session_id == session.id, Call.placed_at.is_not(None)
+        )
+        touches = union_all(sent_nudges, placed_calls).subquery()
         last_touch = await db.scalar(
-            select(OutreachAttempt.id)
-            .where(
-                OutreachAttempt.session_id == session.id,
-                OutreachAttempt.status == AttemptStatus.SENT,
-                OutreachAttempt.sent_at <= after.completed_at,
-                OutreachAttempt.sent_at >= since,
-            )
-            .order_by(OutreachAttempt.sent_at.desc())
+            select(touches.c.attempt_id)
+            .where(touches.c.at <= after.completed_at, touches.c.at >= since)
+            .order_by(touches.c.at.desc())
             .limit(1)
         )
         if last_touch is not None:
