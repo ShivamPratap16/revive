@@ -13,7 +13,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.config import get_settings
-from app.domain.insights import build_prompt, rule_based_insight
+from app.domain.insights import build_prompt, finalize, rule_based_insight
 from app.domain.redaction import redact_turns
 from simulator import scenarios
 
@@ -125,6 +125,24 @@ def score(insight, expected) -> dict[str, bool]:
     }
 
 
+async def _ask_with_retries(analyzer, prompt: str, tries: int = 4):
+    """Same policy as production: retry transient errors with backoff, give up on bad output."""
+    from app.llm.gemini import LlmInvalidOutput, LlmTransient
+
+    for attempt in range(1, tries + 1):
+        try:
+            return (await analyzer.analyze(prompt)).insight
+        except LlmTransient as exc:
+            wait = max(2**attempt, exc.retry_after or 0)
+            print(f"      transient error ({exc}); retrying in {wait:.0f}s")
+            await asyncio.sleep(wait)
+        except LlmInvalidOutput as exc:
+            print(f"      invalid output: {exc}")
+            if attempt >= 2:
+                return None
+    return None
+
+
 async def run(use_llm: bool) -> float:
     analyzer = None
     if use_llm:
@@ -139,10 +157,24 @@ async def run(use_llm: bool) -> float:
     for group, name, step, turns, expected in cases():
         if analyzer:
             prompt = build_prompt(turns, CALL_TIME, step, None)
-            insight = (await analyzer.analyze(prompt)).insight
+            insight = await _ask_with_retries(analyzer, prompt)
             await asyncio.sleep(60 / get_settings().gemini_rpm)  # stay inside the free tier
+            if insight is None:  # unusable answer: counts as wrong on every field
+                print(f"MISS  {group:9} {name:38} (no usable answer)")
+                for k in (
+                    "outcome",
+                    "dropoff_reason",
+                    "do_not_call",
+                    "callback",
+                    "language",
+                    "all fields",
+                ):
+                    totals.setdefault((group, k), []).append(False)
+                continue
         else:
             insight = rule_based_insight(turns, CALL_TIME)
+        # Score what production would store: the same post-processing as the service.
+        insight, _ = finalize(insight, turns)
         result = score(insight, expected)
         for k, ok in result.items():
             totals.setdefault((group, k), []).append(ok)

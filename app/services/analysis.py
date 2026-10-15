@@ -24,6 +24,7 @@ from app.domain.insights import (
     PROMPT_VERSION,
     CallInsight,
     build_prompt,
+    finalize,
     parse_callback,
     quote_is_real,
     rule_based_insight,
@@ -217,8 +218,8 @@ async def process_analysis(
 
     # 3. Guardrails and actions, in one transaction with the stored result.
     async with SessionFactory() as db:
-        notes, actions = list(result.notes), []
-        insight = result.insight
+        insight, notes = finalize(result.insight, turns)
+        notes, actions = list(result.notes) + notes, []
 
         if insight.key_quote and not quote_is_real(insight.key_quote, turns):
             notes.append("key_quote not found in transcript: lowered confidence")

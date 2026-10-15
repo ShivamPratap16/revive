@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
-PROMPT_VERSION = "insight-v1"  # stored with every result, so we know which prompt produced it
+PROMPT_VERSION = "insight-v2"  # stored with every result, so we know which prompt produced it
 
 
 class Outcome(StrEnum):
@@ -83,12 +83,18 @@ GEMINI_SCHEMA = {
         "outcome": _enum(Outcome, "How the call ended for the KYC journey."),
         "dropoff_reason": _enum(DropoffReason, "Why the user had stopped the KYC step."),
         "sentiment": _enum(Sentiment, "The user's overall attitude on the call."),
-        "spoken_language": _enum(SpokenLanguage, "The language the USER mostly spoke."),
+        "spoken_language": _enum(
+            SpokenLanguage,
+            "The language the USER mostly spoke. hi = Hindi in Devanagari script; "
+            "hinglish = Hindi written in Latin letters or mixed with English "
+            "(e.g. 'mujhe loan nahi chahiye'); en = English.",
+        ),
         "callback_requested_at": {
             "type": "STRING",
             "nullable": True,
-            "description": "If the user asked to be called at a specific time: local time as "
-            "YYYY-MM-DDTHH:MM. If they said 'after 6', use 18:00. Otherwise null.",
+            "description": "Only if the user asked US to call them back at a time: local time "
+            "as YYYY-MM-DDTHH:MM ('after 6' -> 18:00). If the user says THEY will do the "
+            "step later ('kal kar lunga', 'I'll do it tonight'), this is null.",
         },
         "do_not_call": {
             "type": "BOOLEAN",
@@ -117,6 +123,9 @@ Extract the fields of the response schema. Rules:
 "unknown", "unclear" or null. Never guess.
 - key_quote must be copied exactly from one USER turn, in its original language.
 - do_not_call is true only for an explicit request to stop calling. Being busy is not one.
+- A user who will finish the step on their own later is "will_complete_later", not a \
+callback request. A user who asks to switch language or struggles with it has \
+dropoff_reason "language_difficulty".
 - callback_requested_at: resolve relative times ("shaam ko 6 baje", "kal subah") using the \
 call's local date and time given below. Return local time, no timezone.
 - Personal data has been replaced with tags like [PHONE] or [NAME]. Do not try to recover it.
@@ -269,3 +278,20 @@ def rule_based_insight(turns: list[dict], call_local_time: datetime) -> CallInsi
         key_quote=quote[:400],
         confidence=0.4,
     )
+
+
+def finalize(insight: CallInsight, turns: list[dict]) -> tuple[CallInsight, list[str]]:
+    """Post-processing applied to every insight, whoever produced it.
+
+    Some fields are better decided by code than by a model. Which script the user wrote
+    in is a fact, not a judgement, and the eval showed the rules get language right on
+    every case while the model wavered between prompt versions. So the model handles
+    understanding (reason, intent, times) and code handles the mechanical part.
+    """
+    notes = []
+    user_text = " ".join(t["text"] for t in turns if t["speaker"] == "user")
+    language = _spoken_language(user_text)
+    if language != insight.spoken_language:
+        notes.append(f"spoken_language set by script detection: {language.value}")
+        insight = insight.model_copy(update={"spoken_language": language})
+    return insight, notes

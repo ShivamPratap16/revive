@@ -125,7 +125,7 @@ async def test_llm_callback_is_scheduled_and_pii_never_sent(client, api_key):
         "done",
         "llm",
         "fake-model",
-        "insight-v1",
+        "insight-v2",
     )
     assert a.redactions == {"PHONE": 1, "NAME": 1}
     assert a.actions[0].startswith("callback scheduled for")
